@@ -1,0 +1,11 @@
+{
+	"id": "sample-plugin",
+	"name": "Cps Obsidian Plugins",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "cps个人自用图片上传插件",
+	"author": "Obsidian",
+	"authorUrl": "https://obsidian.md",
+	"fundingUrl": "https://obsidian.md/pricing",
+	"isDesktopOnly": false
+}
