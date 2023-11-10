@@ -10,5 +10,13 @@
 @echo off && setlocal enabledelayedexpansion
 @chcp 65001
 
+@REM 办公室电脑
+set "obsidianDir=W:/CPS/MyProject/cps/cps-blog/docs/.obsidian/plugins/cps"
+
+@REM 家里win11
+@if "%computername%"=="DESKTOP-T94552O" (
+	set "obsidianDir=D:/CPS/MyProject/Projects_Personal/cps-blog/docs/.obsidian/plugins/cps"
+)
+
 :: 复制到obsidian目录进行测试
-npm run build && copy "./manifest.json" "./dist/manifest.json" /y && xcopy "./dist" "W:/CPS/MyProject/cps/cps-blog/docs/.obsidian/plugins/cps" /i /d /c /v /s /y /f
+npm run build && copy "./manifest.json" "./dist/manifest.json" /y && xcopy "./dist" "%obsidianDir%" /i /d /c /v /s /y /f

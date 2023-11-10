@@ -1,13 +1,13 @@
 /*
  * @Author: cpasion-office-win10 373704015@qq.com
  * @Date: 2023-10-12 15:02:02
- * @LastEditors: cpasion-office-win10 373704015@qq.com
- * @LastEditTime: 2023-11-08 18:30:47
+ * @LastEditors: CPS holy.dandelion@139.com
+ * @LastEditTime: 2023-11-09 23:08:26
  * @FilePath: \obsidian-plugin-ts\src\main.ts
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
 
-import { App, Plugin, PluginSettingTab, Setting, FileSystemAdapter } from "obsidian";
+import { App, Plugin, PluginSettingTab, Setting, Editor } from "obsidian";
 import { MarkdownView } from "obsidian";
 import { isImage, isPastedImage, parseObsidianUriToPath } from "./utils";
 import { TFile, Notice } from "obsidian";
@@ -49,17 +49,16 @@ export default class MyPlugin extends Plugin {
 
 		await this.loadSettings();
 
-		this.registerEvent(this.app.vault.on("create", this.replaceFileToUrl));
+		this.registerEvent(this.app.vault.on("create", this.main));
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new SampleSettingTab(this.app, this));
 	}
 
-	async replaceFileToUrl(file: TFile) {
+	main = async (file: TFile) => {
 		debugLog("触发 this.app.vault.on - create");
 
 		if (!(file instanceof TFile)) return;
-
 		const timeGapMs = Date.now() - file.stat.ctime;
 
 		// if the pasted image is created more than 1 second ago, ignore it
@@ -69,39 +68,66 @@ export default class MyPlugin extends Plugin {
 		if (!isImage(file) || !isPastedImage(file)) return;
 
 		debugLog("发现图片文件被创建", file);
-		const activeFile: TFile = this.app.workspace.getActiveFile() as TFile;
-		const imgFilePath = parseObsidianUriToPath(this.app.vault.getResourcePath(file));
-		const linkTextOld = this.makeLinkText(file, activeFile.path);
 
-		const imgLocalUrl = await this.shell(["cps", "--upload", `"${imgFilePath}"`]);
-		if (!imgLocalUrl) return debugLog("获取链接失败");
-		const linkTextNew = `![](${imgLocalUrl})`;
+		const activeFile = this.app.workspace.getActiveFile();
+		if (!activeFile) {
+			debugLog("activeFile 获取失败", file);
+
+			new Notice(`Cps Plugins Failed get editor`);
+
+			return;
+		}
 
 		const editor = this.getActiveEditor(activeFile.path);
 		if (!editor) {
 			new Notice(`Cps Plugins Failed get editor`);
 			return;
 		}
+		// 提早获取当前的游标位置，确认当前行存在
+		// 这里获取到的行是没用内容或者是未插入文件连接的行内容，有滞后性
 		const cursor = editor.getCursor();
-		const line = editor.getLine(cursor.line);
+		let targetLine = cursor.line;
 
-		console.log({ linkTextOld, linkTextNew });
+		const lineCountBe = editor.lineCount();
 
-		debugLog("current line", line);
+		const imgFilePath = parseObsidianUriToPath(this.app.vault.getResourcePath(file));
+		const linkTextOld = this.makeLinkText(file, activeFile.path);
 
+		const imgLocalUrl = await this.runCpsScripts(["cps", "--upload", `"${imgFilePath}"`]);
+		if (!imgLocalUrl) return debugLog("获取链接失败");
+		const linkTextNew = `![](${imgLocalUrl})`;
+
+		// 因为文件创建有滞后性，必须在替换前再重新获取行的实例进行操作
+		const lineCountAf = editor.lineCount();
+
+		// 图片之前的内容被修改过了，行数发生了变化，尝试推算位置
+		if (lineCountBe > lineCountAf) {
+			targetLine -= lineCountBe - lineCountAf;
+		}
+
+		// 替换文本
+		const line = editor.getLine(targetLine);
 		editor.transaction({
 			changes: [
 				{
-					from: { ...cursor, ch: 0 },
-					to: { ...cursor, ch: line.length },
+					from: { line: targetLine, ch: 0 },
+					to: { line: targetLine, ch: line.length },
 					text: line.replace(linkTextOld, linkTextNew),
 				},
 			],
 		});
-	}
+
+		// 判断是否修改成功，删除当前文件夹的旧图片
+		const newLineStr = editor.getLine(targetLine);
+		if (line != newLineStr) {
+			debugLog("内容不同，修改成功");
+			this.app.vault.delete(file);
+		}
+	};
 
 	async onunload() {
 		debugLog("cps plugins unload");
+		this.app.vault.off("create", this.main);
 	}
 
 	async loadSettings() {
@@ -129,49 +155,35 @@ export default class MyPlugin extends Plugin {
 		return null;
 	}
 
-	// returns a new name for the input file, with extension
-	async generateNewName(file: TFile, activeFile: TFile): Promise<string> {
-		const newName = activeFile.basename + "-" + Date.now();
-		const extension = this.settings.pngToJpeg ? "jpeg" : file.extension;
-
-		return `${newName}.${extension}`;
-	}
-
-	async keepOrgName(file: TFile, activeFile: TFile): Promise<string> {
-		const newName = file.basename;
-		const extension = this.settings.pngToJpeg ? "jpeg" : file.extension;
-
-		return `${newName}.${extension}`;
-	}
-
 	makeLinkText(file: TFile, sourcePath: string, subpath?: string): string {
 		return this.app.fileManager.generateMarkdownLink(file, sourcePath, subpath);
 	}
 
-	async shell(commands: string[]) {
+	/**
+	 * @description: 调用 cps-cli 的--upload指令，解析执行的结果
+	 */
+	async runCpsScripts(commands: string[]) {
 		try {
 			const command = commands.join(" ");
 			// 使用 promisified exec 函数
 			const { stdout, stderr } = await execAsync(command);
 
 			// 返回 true 表示命令执行成功
-			if (stdout) return this.parserShellResult(stdout);
+			if (stdout) {
+				const target = stdout.split("\n");
+				for (let i in target) {
+					if (target[i] == "Upload Success:") {
+						let index = parseInt(i) + 1;
+						return target[index];
+					}
+				}
+			}
 
 			return "";
 		} catch (error) {
 			console.error(`Error executing command: ${error.message}`);
 			// 返回 false 表示命令执行失败
 			return "";
-		}
-	}
-
-	async parserShellResult(stdout: string) {
-		const target = stdout.split("\n");
-		for (let i in target) {
-			if (target[i] == "Upload Success:") {
-				let index = parseInt(i) + 1;
-				return target[index];
-			}
 		}
 	}
 }
@@ -186,24 +198,7 @@ class SampleSettingTab extends PluginSettingTab {
 
 	display(): void {
 		const { containerEl } = this;
-
 		containerEl.empty();
-		// new Setting(containerEl)
-		// 	.setName("")
-		// 	.setDesc(
-		// 		"这是一个自用插件，用于每次通过粘贴板图片复制到md文件时，将会调用本地的图片服务器上传服务"
-		// 	)
-		// 	.addText((text) =>
-		// 		text
-		// 			.setPlaceholder("Enter your secret")
-		// 			.setValue(this.plugin.settings.mySetting)
-
-		// 			.onChange(async (value) => {
-		// 				this.plugin.settings.mySetting = value;
-		// 				await this.plugin.saveSettings();
-		// 			})
-		// 	);
-
 		new Setting(containerEl)
 			.setName("开启插件")
 			.setDesc("这是一个布尔值的配置选项")
