@@ -6,6 +6,7 @@
 @REM Modified time: 2023-10-13 15:09:04.325869
 @REM @file_path "W:\CPS\MyProject\demo\cps-cli\obsidian-plugin-ts"
 @REM @Filename "build.bat"
+@REM 【本大调试脚本】 将当前的插件编译后复制到obsidian的插件文件夹中
 
 @echo off && setlocal enabledelayedexpansion
 @chcp 65001
